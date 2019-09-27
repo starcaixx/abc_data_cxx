@@ -2,7 +2,6 @@ package com.cxlx.avro2hive;
 
 import com.alibaba.fastjson.JSONObject;
 import com.aliyun.oss.OSSClient;
-import com.cxlx.avro2hive.mr.HbcLogStructure;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.avro.mapred.AvroKey;
 import org.apache.avro.mapreduce.AvroKeyInputFormat;
@@ -26,6 +25,7 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.TreeSet;
 
@@ -37,6 +37,7 @@ public class Avro2Hive extends Configured implements Tool {
     private Configuration conf = null;
     private static final Logger logger = LoggerFactory.getLogger(Avro2Hive.class);
 
+
     public static void main(String[] args) throws Exception {
         for (String arg : args) {
             logger.info("arg:" + arg);
@@ -46,32 +47,8 @@ public class Avro2Hive extends Configured implements Tool {
             return;
         }
 
-        /*String[] split = args[0].split("/");
-
-        Configuration conf = new Configuration();
-        conf.set("fs.oss.accessKeyId", "LTAIwcPKqog41QMl");
-        conf.set("fs.oss.accessKeySecret", "XnRCnAiq49dTIGV385RJR4ivAwsoWD");
-        conf.set("fs.oss.endpoint", "oss-cn-hangzhou-internal.aliyuncs.com");
-
-        List<String> lists = EMapReduceOSSUtil.listCompleteUri(split[2], split[3] + "/" + split[4] + "/" + split[5] + "/", conf, false);
-        int run = 0;
-        for (String list : lists) {
-            System.out.println(list);
-            logger.error("list:"+list);
-            args[0] = args[0]+list.substring(list.lastIndexOf("/")+1);
-            logger.error("args:"+StringUtils.join("\n:",args));
-            run = ToolRunner.run(new Avro2Hive(), args);
-            if (run==0) {
-                continue;
-            }else {
-                break;
-            }
-        }*/
         int run = ToolRunner.run(new Avro2Hive(), args);
         System.exit(run);
-
-        /*int run = ToolRunner.run(new Avro2Hive(), args);
-        System.exit(run);*/
     }
 
     @Override
@@ -80,13 +57,7 @@ public class Avro2Hive extends Configured implements Tool {
         conf.set("outpath", args[1]);
         conf.set("logdate", args[2]);
 
-//        conf.set("fs.defaultFS","hdfs://172.16.8.249:9000");
-//        conf.set("fs.oss.accessKeyId", "LTAIwcPKqog41QMl");
-//        conf.set("fs.oss.accessKeySecret", "XnRCnAiq49dTIGV385RJR4ivAwsoWD");// 对应的密钥
-//        conf.set("fs.oss.endpoint", "oss-cn-hangzhou-internal.aliyuncs.com");//访问 OSS 使用的网络
-
-
-        Job job = Job.getInstance(conf,this.getClass().getSimpleName());
+        Job job = Job.getInstance(conf, this.getClass().getSimpleName());
 
         job.setJarByClass(Avro2Hive.class);
 
@@ -99,14 +70,13 @@ public class Avro2Hive extends Configured implements Tool {
         job.setOutputKeyClass(Text.class);
         job.setOutputValueClass(NullWritable.class);
 
+//        job.setInputFormatClass(FileInputFormat.class);
         job.setInputFormatClass(AvroKeyInputFormat.class);
         AvroKeyInputFormat.setMaxInputSplitSize(job, 1024 * 1024 * 128);
 
         initInpath(job);
         initOutpath(job);
 
-//        FileOutputFormat.setOutputPath(job,new Path(args[1]));
-//        AvroKeyInputFormat.addInputPath(job,new Path(args[0]));
         //通过此配置可以不再产生默认的空文件
         LazyOutputFormat.setOutputFormatClass(job, TextOutputFormat.class);
         boolean b = job.waitForCompletion(true);
@@ -125,26 +95,35 @@ public class Avro2Hive extends Configured implements Tool {
     }
 
     private void initInpath(Job job) throws IOException {
-        String inpath = conf.get("inpath");
 //        oss://trace-log/front/etl_avro_out/20190312/
 //        oss://LTAIwcPKqog41QMl:XnRCnAiq49dTIGV385RJR4ivAwsoWD@trace-log.oss-cn-hangzhou-internal.aliyuncs.com/front/etl_avro_out/20190313/part-m-00000.avro
+
+        String inpath = conf.get("inpath");
+
+        logger.info("enter driver initInpath");
         String[] split = inpath.split("/");
 
-        Path inPath = new Path(inpath);
-        logger.info("enter driver initInpath");
         OSSClient ossClient = null;
 
         try {
             ossClient = EMapReduceOSSUtil.getOssClient(conf);
-            if (ossClient.doesObjectExist(split[2],split[3]+"/"+split[4]+"/"+split[5]+"/")) {
-//            if (ossClient.doesObjectExist(split[2],split[3]+"/"+split[4]+"/"+split[5]+"/"+split[6])) {
-//            FileInputFormat.setInputPaths(job, inPath);
-//            AvroKeyInputFormat.addInputPaths(job, inPath);
-                AvroKeyInputFormat.addInputPath(job,inPath);
-            } else {
-                throw new RuntimeException(inpath + "not exists!");
+            //传入的是文件
+            if (split[split.length - 1].contains(".")) {
+                AvroKeyInputFormat.addInputPath(job, new Path(inpath));
+            //传入的是目录
+            }else {
+                if (ossClient.doesObjectExist(split[2], split[3] + "/" + split[4] + "/" + split[5] + "/")) {
+                    StringBuilder inPath = new StringBuilder();
+                    List<String> lists = EMapReduceOSSUtil.listCompleteUri(split[2], split[3] + "/" + split[4] + "/" + split[5] + "/", conf, false);
+                    for (String list : lists) {
+                        AvroKeyInputFormat.addInputPath(job, new Path(inpath+list.substring(list.lastIndexOf("/")+1)));
+                        logger.info("uri:" + inpath+list.substring(list.lastIndexOf("/")+1));
+                    }
+                } else {
+                    throw new RuntimeException(inpath + "not exists!");
+                }
             }
-        }finally {
+        } finally {
             ossClient.shutdown();
         }
 
@@ -306,45 +285,45 @@ public class Avro2Hive extends Configured implements Tool {
             }
 
 //        System.out.println(record);
-            json.set(record+"");
+            json.set(record + "");
             context.write(eventType, json);
         }
     }
 
-    public static class AvroLogReducer extends Reducer<Text,Text,Text,NullWritable> {
-        MultipleOutputs<Text,NullWritable> multipleOutputs=null;
+    public static class AvroLogReducer extends Reducer<Text, Text, Text, NullWritable> {
+        MultipleOutputs<Text, NullWritable> multipleOutputs = null;
         FileSystem fs = null;
         Configuration conf = null;
         String outPath = null;
         String logDate = null;
-        Text outKey=new Text();
+        Text outKey = new Text();
 
         @Override
         protected void setup(Context context) throws IOException, InterruptedException {
             logger.info("enter reduce setup ==========================");
-            multipleOutputs=new MultipleOutputs<Text,NullWritable>(context);
+            multipleOutputs = new MultipleOutputs<Text, NullWritable>(context);
             conf = context.getConfiguration();
             super.setup(context);
             outPath = conf.get("outpath");
             logDate = conf.get("logdate");
-            System.out.println("输出路径："+outPath);
+            System.out.println("输出路径：" + outPath);
         }
 
         @Override
         protected void reduce(Text key, Iterable<Text> values, Context context) throws IOException, InterruptedException {
             initOutpath(key.toString());
             for (Text value : values) {
-                multipleOutputs.write(value, NullWritable.get(),outPath+key.toString().toLowerCase()+"/dt="+logDate+"/"+key.toString().toLowerCase());
+                multipleOutputs.write(value, NullWritable.get(), outPath + key.toString().toLowerCase() + "/dt=" + logDate + "/" + key.toString().toLowerCase());
             }
         }
 
         private void initOutpath(String key) throws IOException {
-            Path path = new Path(outPath+key.toString().toLowerCase()+"/dt="+logDate+"/");
+            Path path = new Path(outPath + key.toString().toLowerCase() + "/dt=" + logDate + "/");
 
             fs = FileSystem.get(conf);
 
             if (fs.exists(path)) {
-                fs.delete(path,true);
+                fs.delete(path, true);
             }
         }
 

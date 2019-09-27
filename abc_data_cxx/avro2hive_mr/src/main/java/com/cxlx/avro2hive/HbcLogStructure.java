@@ -1,4 +1,4 @@
-package com.cxlx.avro2hive.mr;
+package com.cxlx.avro2hive;
 
 import com.huangbaoche.logservice.avro.BaseLog;
 import org.apache.avro.Schema;
