@@ -5,6 +5,9 @@ import org.apache.avro.Schema;
 
 import java.util.*;
 
+/**
+ * Created by gaikou on 2019/8/27.
+ */
 public class HbcLogStructure {
 
     private HbcLogStructure(){}
@@ -25,6 +28,7 @@ public class HbcLogStructure {
                 tableMap = new HashMap();
                 Map<String, String> typeMap = new LinkedHashMap<>();
                 Schema schema = BaseLog.getClassSchema();
+
                 parseRecord(schema,"",typeMap);
                 generateHiveTableInfo(typeMap);
             }
@@ -33,7 +37,7 @@ public class HbcLogStructure {
         return tableMap;
     }
 
-    private static void generateHiveTableInfo(Map<String,String> typeMap){
+    private void generateHiveTableInfo(Map<String,String> typeMap){
 
         Schema schema = BaseLog.getClassSchema();
         List<String> eventType = schema.getField("eventType").schema().getEnumSymbols();
@@ -76,7 +80,7 @@ public class HbcLogStructure {
         }
     }
 
-    private static void parseUnion(Schema schema, String parentName,Map<String,String> typeMap) {
+    private void parseUnion(Schema schema, String parentName,Map<String,String> typeMap) {
         List<Schema> types = schema.getTypes();
 
         for (Schema item : types) {
@@ -94,10 +98,9 @@ public class HbcLogStructure {
                 parseRecord(item, parentName,typeMap);
             }
         }
-
     }
 
-    private static void parseRecord(Schema schema, String parentName,Map<String,String> typeMap){
+    private void parseRecord(Schema schema, String parentName,Map<String,String> typeMap){
         List<Schema.Field> fields = schema.getFields();
         for (Schema.Field fieldItem : fields) {
             String fieldName = fieldItem.name();       // 字段的名称, 如:
@@ -114,6 +117,8 @@ public class HbcLogStructure {
             } else if (isBasicType(schemaName)) {
                 typeMap.put(parentName+"."+fieldName, schemaName);
 //                System.out.println(parentName+"."+fieldName +": " + schemaName);
+            } else if (schemaName.equalsIgnoreCase("EventType")) {
+                typeMap.put(parentName+"."+fieldName, "string");
             }
         }
     }

@@ -24,16 +24,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.TreeSet;
+import java.util.*;
 
 /**
  * @author star
  * @create 2019-09-09 15:21
  */
-public class Avro2Hive extends Configured implements Tool {
+public class Avro2Hive extends Configured implements Tool  {
     private Configuration conf = null;
     private static final Logger logger = LoggerFactory.getLogger(Avro2Hive.class);
 
@@ -43,7 +40,7 @@ public class Avro2Hive extends Configured implements Tool {
             logger.info("arg:" + arg);
         }
         if (args.length != 3) {
-            logger.error("Usage: AvroToHiveDriver <input path> <output path,eg:/user/hive/warehouse/ods.db/> <date eg:20190101>");
+            logger.error("Usage: AvroToHiveDriver <input path> <output path,eg:/user/hive/warehouse/xxx_ods.db/> <date eg:20190101>");
             return;
         }
 
@@ -56,6 +53,7 @@ public class Avro2Hive extends Configured implements Tool {
         conf.set("inpath", args[0]);
         conf.set("outpath", args[1]);
         conf.set("logdate", args[2]);
+        conf.set("basiceventinfooutpath", args[1]+"basiceventinfo/dt="+args[2]+"/");
 
         Job job = Job.getInstance(conf, this.getClass().getSimpleName());
 
@@ -70,12 +68,14 @@ public class Avro2Hive extends Configured implements Tool {
         job.setOutputKeyClass(Text.class);
         job.setOutputValueClass(NullWritable.class);
 
-//        job.setInputFormatClass(FileInputFormat.class);
         job.setInputFormatClass(AvroKeyInputFormat.class);
         AvroKeyInputFormat.setMaxInputSplitSize(job, 1024 * 1024 * 128);
 
+//        AvroKeyInputFormat.setInputPaths(job,new Path(args[0]));
         initInpath(job);
         initOutpath(job);
+
+
 
         //通过此配置可以不再产生默认的空文件
         LazyOutputFormat.setOutputFormatClass(job, TextOutputFormat.class);
@@ -85,7 +85,8 @@ public class Avro2Hive extends Configured implements Tool {
 
     private void initOutpath(Job job) throws IOException {
 //        Path outPath = new Path(conf.get("outpath"));
-        Path outPath = new Path("/user/hive/warehouse/ods.db/xxx/19000101/");//临时给一个不用的目录，因为最终输出的目录无法确定
+
+        Path outPath = new Path(conf.get("basiceventinfooutpath"));//临时给一个不用的目录，因为最终输出的目录无法确定
         FileSystem fs = FileSystem.get(conf);
 
         if (fs.exists(outPath)) {
@@ -141,152 +142,66 @@ public class Avro2Hive extends Configured implements Tool {
     }
 
     public static class AvroLogMapper extends Mapper<AvroKey<GenericRecord>, NullWritable, Text, Text> {
+        MultipleOutputs<Text, Text> multipleOutputs = null;
+        private static volatile Map<String, ArrayList<String>> structTableMap = HiveJdbcUtil.getTableInfo();
         Text eventType = new Text();
         Text json = new Text();
         StringBuilder record = new StringBuilder();
-        private static volatile String[][] basicInfo = new String[4][];
-
-        Map<String, Map<String, String>> tableMap = null;
 
         @Override
         protected void setup(Context context) throws IOException, InterruptedException {
             logger.info("enter map setup=============================");
-            tableMap = HbcLogStructure.getInstance().getTableMap();
 
-//        System.out.println("tableMap:"+tableMap);
-            Iterator<String> it = tableMap.keySet().iterator();
+            multipleOutputs = new MultipleOutputs<Text, Text>(context);
 
-            StringBuilder basic = new StringBuilder();
-            StringBuilder client = new StringBuilder();
-            StringBuilder userinfo = new StringBuilder();
-            StringBuilder abtest = new StringBuilder();
-
-//        System.out.println(tableMap.get("clickLineComponent"));
-
-            if (it.hasNext()) {
-                String next = it.next();
-                TreeSet<String> ts = new TreeSet<>();
-
-                for (String field : tableMap.get(next).keySet()) {
-                    String[] wholeFieldName = field.split("\\.");
-                    if (wholeFieldName.length <= 3) {
-                        if (ts.size() != 3 && wholeFieldName.length == 3) {
-                            ts.add(wholeFieldName[1]);
-                        }
-                        if ("client".equalsIgnoreCase(wholeFieldName[1])) {
-                            client.append(field.substring(field.lastIndexOf(".") + 1)).append("|");
-                        } else if ("userinfo".equalsIgnoreCase(wholeFieldName[1])) {
-                            userinfo.append(field.substring(field.lastIndexOf(".") + 1)).append("|");
-                        } else if ("abtest".equalsIgnoreCase(wholeFieldName[1])) {
-                            abtest.append(field.substring(field.lastIndexOf(".") + 1)).append("|");
-                        } else {
-                            basic.append(field.replace(".", "")).append("|");
-                        }
-                    }
-                }
-
-                for (String qualify : ts) {
-                    if ("client".equalsIgnoreCase(qualify)) {
-                        client.insert(0, qualify + "|");
-                    } else if ("userinfo".equalsIgnoreCase(qualify)) {
-                        userinfo.insert(0, qualify + "|");
-                    } else if ("abtest".equalsIgnoreCase(qualify)) {
-                        abtest.insert(0, qualify + "|");
-                    }
-                }
-
-                basicInfo[0] = basic.toString().split("\\|");
-                basicInfo[1] = client.toString().split("\\|");
-                basicInfo[2] = userinfo.toString().split("\\|");
-                basicInfo[3] = abtest.toString().split("\\|");
-            }
         }
 
         @Override
         protected void map(AvroKey<GenericRecord> key, NullWritable value, Context context) throws IOException, InterruptedException {
             record.delete(0, record.length());
             GenericRecord datum = key.datum();
-//        System.out.println("datum:"+datum);
 
-            eventType.set(datum.get("eventType") + "");
+            JSONObject jsonGene = JSONObject.parseObject(datum.toString());
 
-
-            for (int j = 0; j < basicInfo[0].length; j++) {
-                Object o = datum.get(basicInfo[0][j]);
-                if (o == null) {
-                    o = "\\N";
-                }
-                record.append(o).append("\001");
+            Object eventType = jsonGene.get("eventType");
+            if (!structTableMap.containsKey(eventType)) {
+                logger.error("datum:"+datum+":eventType:"+eventType);
+                return;
             }
+            ArrayList<String> cols = structTableMap.get(eventType+"");
+            Iterator<String> it = structTableMap.keySet().iterator();
+//            logger.info(jsonGene.toString());
+            for (String col : cols) {
+                JSONObject jsonObject = null;
 
-            for (int i = 1; i < basicInfo.length; i++) {
-                JSONObject jsonObject = JSONObject.parseObject(datum.get(basicInfo[i][0]) + "");
-                if (jsonObject != null) {
-                    for (int j = 1; j < basicInfo[i].length; j++) {
-                        if (jsonObject.containsKey(basicInfo[i][j])) {
-                            Object o = jsonObject.get(basicInfo[i][j]);
-                            if (o == null) {
-                                o = "\\N";
-                            }
-                            record.append(o);
-                        }
-                        record.append("\001");
-
+                JSONObject object = jsonGene;
+                while (col.contains(".")) {
+                    int i = col.indexOf(".");
+                    object = JSONObject.parseObject(object.get(col.substring(0,i))+"");
+                    if (object == null) {
+                        break;
                     }
-                } else {
-                    for (int j = 1; j < basicInfo[i].length; j++) {
-                        record.append("\001");
-                    }
+                    col = col.substring(i+1);
                 }
-            }
-
-            Iterator<String> tableInfo = tableMap.get(eventType + "").keySet().iterator();
-
-            String prefix = null;
-            String[] wholeFieldInfo = null;
-
-            JSONObject eventObject = null;
-
-            boolean isEventNull = false;
-
-            while (tableInfo.hasNext()) {
-                String field = tableInfo.next();
-                String[] fieldInfos = field.split("\\.");
-                if (fieldInfos.length > 3) {
-                    if (prefix == null || "".equals(prefix)) {
-                        prefix = fieldInfos[1];
-                        wholeFieldInfo = field.substring(1, field.lastIndexOf(".")).split("\\.");
-                    } else if (!prefix.equals(fieldInfos[1])) {
-                        prefix = fieldInfos[1];
-                        wholeFieldInfo = field.substring(1, field.lastIndexOf(".")).split("\\.");
-                    }
-
-                    if (eventObject == null && !isEventNull) {
-                        eventObject = JSONObject.parseObject(datum.get(wholeFieldInfo[0]) + "");
-                        for (int i = 1; i < wholeFieldInfo.length; i++) {
-                            if (eventObject == null) {//事件无数据
-                                isEventNull = true;
-                                break;
-                            }
-                            eventObject = eventObject.getJSONObject(wholeFieldInfo[i]);
-                        }
-                    }
-
-                    if (eventObject != null) {
-                        Object o = eventObject.get(fieldInfos[fieldInfos.length - 1]);
-                        if (o == null) {
-                            o = "\\N";
-                        }
-                        record.append(o);
-                    }
-
-                    record.append("\001");
+                Object colSimp = "\\N";
+                if (object != null) {
+                    colSimp = object.get(col);
                 }
+//                logger.info(col+"::"+colSimp+"::"+object);
+                record.append(col+":"+colSimp).append("\001");
             }
+//            cols
+//            this.eventType.set(eventType + "");
 
-//        System.out.println(record);
+
+
             json.set(record + "");
-            context.write(eventType, json);
+            context.write(this.eventType, json);
+        }
+
+        @Override
+        protected void cleanup(Context context) throws IOException, InterruptedException {
+            super.cleanup(context);
         }
     }
 
